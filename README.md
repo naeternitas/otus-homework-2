@@ -1,6 +1,13 @@
 # Otus Homework 2
 ## Prepare
-### Raid 5 Build
+- [x] добавить в Vagrantfile еще дисков;
+- [ ] сломать/починить raid;
+- [x] собрать R0/R5/R10 на выбор;
+- [ ] прописать собранный рейд в конф, чтобы рейд собирался при загрузке;
+- [x] создать GPT раздел и 5 партиций.
+- [ ] Vagrantfile, который сразу собирает систему с подключенным рейдом и смонтированными разделами. После перезагрузки стенда разделы должны автоматически примонтироваться
+
+### Raid 5 Build 
 Проверим наличие существующих mdadm масивов:
 ```
 cat /proc/mdstat
@@ -94,4 +101,104 @@ tmpfs            24M     0   24M   0% /run/user/1000
 tmpfs            24M     0   24M   0% /run/user/0
 /dev/md0        961M  2.5M  893M   1% /mnt/md0
 ```
+### Raid Fault and recovery
+```
+mdadm --detail /dev/md0
+```
+```
+/dev/md0:
+           Version : 1.2
+     Creation Time : Thu Jan 13 11:42:53 2022
+        Raid Level : raid5
+        Array Size : 1015808 (992.00 MiB 1040.19 MB)
+     Used Dev Size : 253952 (248.00 MiB 260.05 MB)
+      Raid Devices : 5
+     Total Devices : 5
+       Persistence : Superblock is persistent
 
+       Update Time : Thu Jan 13 11:46:26 2022
+             State : clean
+    Active Devices : 5
+   Working Devices : 5
+    Failed Devices : 0
+     Spare Devices : 0
+
+            Layout : left-symmetric
+        Chunk Size : 512K
+
+Consistency Policy : resync
+
+              Name : otuslinux:0  (local to host otuslinux)
+              UUID : 62f15965:b0bfaa29:e2ba6a65:4176f881
+            Events : 42
+
+    Number   Major   Minor   RaidDevice State
+       0       8       16        0      active sync   /dev/sdb
+       6       8       32        1      active sync   /dev/sdc
+       2       8       48        2      active sync   /dev/sdd
+       3       8       64        3      active sync   /dev/sde
+       5       8       80        4      active sync   /dev/sdf
+```
+Запускаем mdadm для перевода диска sdd в режим fault
+```
+sudo mdadm /dev/md0 -f /dev/sdc
+```
+```
+mdadm: set /dev/sdc faulty in /dev/md0
+```
+
+проверяем статус дисков в массиве md0
+```
+sudo mdadm --detail /dev/md0
+```
+```
+/dev/md0:
+           Version : 1.2
+     Creation Time : Thu Jan 13 11:42:53 2022
+        Raid Level : raid5
+        Array Size : 1015808 (992.00 MiB 1040.19 MB)
+     Used Dev Size : 253952 (248.00 MiB 260.05 MB)
+      Raid Devices : 5
+     Total Devices : 5
+       Persistence : Superblock is persistent
+
+       Update Time : Thu Jan 13 11:48:41 2022
+             State : clean, degraded
+    Active Devices : 4
+   Working Devices : 4
+    Failed Devices : 1
+     Spare Devices : 0
+
+            Layout : left-symmetric
+        Chunk Size : 512K
+
+Consistency Policy : resync
+
+              Name : otuslinux:0  (local to host otuslinux)
+              UUID : 62f15965:b0bfaa29:e2ba6a65:4176f881
+            Events : 44
+
+    Number   Major   Minor   RaidDevice State
+       0       8       16        0      active sync   /dev/sdb
+       -       0        0        1      removed
+       2       8       48        2      active sync   /dev/sdd
+       3       8       64        3      active sync   /dev/sde
+       5       8       80        4      active sync   /dev/sdf
+
+       6       8       32        -      faulty   /dev/sdc
+```
+
+удаляем диск sdc
+```
+sudo mdadm /dev/md0 -r /dev/sdc
+```
+```
+mdadm: hot removed /dev/sdc from /dev/md0
+```
+добавляем диск в тот же массив
+```
+sudo mdadm /dev/md0 -a /dev/sdc
+```
+```
+mdadm: added /dev/sdc
+```
