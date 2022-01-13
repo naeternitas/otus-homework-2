@@ -1,9 +1,9 @@
 # Otus Homework 2
 ## Prepare
 - [x] добавить в Vagrantfile еще дисков;
-- [ ] сломать/починить raid;
+- [x] сломать/починить raid;
 - [x] собрать R0/R5/R10 на выбор;
-- [ ] прописать собранный рейд в конф, чтобы рейд собирался при загрузке;
+- [x] прописать собранный рейд в конф, чтобы рейд собирался при загрузке;
 - [x] создать GPT раздел и 5 партиций.
 - [ ] Vagrantfile, который сразу собирает систему с подключенным рейдом и смонтированными разделами. После перезагрузки стенда разделы должны автоматически примонтироваться
 
@@ -201,4 +201,69 @@ sudo mdadm /dev/md0 -a /dev/sdc
 ```
 ```
 mdadm: added /dev/sdc
+```
+проверяем статус дисков в массиве
+```
+sudo mdadm --detail /dev/md0
+```
+```
+/dev/md0:
+           Version : 1.2
+     Creation Time : Thu Jan 13 11:42:53 2022
+        Raid Level : raid5
+        Array Size : 1015808 (992.00 MiB 1040.19 MB)
+     Used Dev Size : 253952 (248.00 MiB 260.05 MB)
+      Raid Devices : 5
+     Total Devices : 5
+       Persistence : Superblock is persistent
+
+       Update Time : Thu Jan 13 11:57:44 2022
+             State : clean
+    Active Devices : 5
+   Working Devices : 5
+    Failed Devices : 0
+     Spare Devices : 0
+
+            Layout : left-symmetric
+        Chunk Size : 512K
+
+Consistency Policy : resync
+
+              Name : otuslinux:0  (local to host otuslinux)
+              UUID : 62f15965:b0bfaa29:e2ba6a65:4176f881
+            Events : 64
+
+    Number   Major   Minor   RaidDevice State
+       0       8       16        0      active sync   /dev/sdb
+       6       8       32        1      active sync   /dev/sdc
+       2       8       48        2      active sync   /dev/sdd
+       3       8       64        3      active sync   /dev/sde
+       5       8       80        4      active sync   /dev/sdf
+```
+добавим конфигурацию mdadm в автозапуск
+```
+mdadm --verbose --detail -scan > /etc/mdadm.conf
+```
+### Vagrantfile
+находим нужный нам блок
+```
+      box.vm.provision "shell", inline: <<-SHELL
+	      mkdir -p ~root/.ssh
+          cp ~vagrant/.ssh/auth* ~root/.ssh
+	      yum install -y mdadm smartmontools hdparm gdisk 
+  	  SHELL
+```
+и приводим его к следующему виду
+```
+      box.vm.provision "shell", inline: <<-SHELL
+	      mkdir -p ~root/.ssh
+          cp ~vagrant/.ssh/auth* ~root/.ssh
+	      yum install -y mdadm smartmontools hdparm gdisk
+		  mdadm --create --verbose /dev/md0 --level=5 --raid-devices=5 /dev/sdb /dev/sdc /dev/sdd /dev/sde /dev/sdf
+		  mkfs.ext4 -F /dev/md0
+		  mkdir /mnt/md0
+		  mount /dev/md0 /mnt/md0
+		  mdadm --verbose --detail -scan > /etc/mdadm.conf
+		  echo "/dev/md0    /mnt/md0    ext4    defaults    0    1" >> /etc/fstab
+  	  SHELL
 ```
