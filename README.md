@@ -6,7 +6,7 @@
 - [x] прописать собранный рейд в конф, чтобы рейд собирался при загрузке;
 - [x] создать GPT раздел и 5 партиций.
 - [x] Vagrantfile, который сразу собирает систему с подключенным рейдом и смонтированными разделами. После перезагрузки стенда разделы должны автоматически примонтироваться
-- [ ] перенести работающую систему с одним диском на RAID 1. Даунтайм на загрузку с нового диска предполагается. В качестве проверки принимается вывод команды lsblk до и после и описание хода решения (можно воспользоваться утилитой Script).
+- [x] перенести работающую систему с одним диском на RAID 1. Даунтайм на загрузку с нового диска предполагается. В качестве проверки принимается вывод команды lsblk до и после и описание хода решения (можно воспользоваться утилитой Script).
 
 ### Raid 5 Build 
 Проверим наличие существующих mdadm масивов:
@@ -301,4 +301,218 @@ tmpfs           118M     0  118M   0% /sys/fs/cgroup
 tmpfs            24M     0   24M   0% /run/user/1000
 ```
 ### Single Disk to RAID
-Последняя задача в списке 
+Последняя задача в списке перенос диска на Raid1 для этого в Vagrantfile увеличем объем первого диска сата до 40960(40GB) и сменим тип дисков с Fixed на Standard
+```
+	:disks => {
+		:sata1 => {
+			:dfile => home + '/VirtualBox VMs/disks/sata1.vdi',
+			:size => 40960,
+			:port => 1
+		},
+```
+```
+				vb.customize ['createhd', '--filename', dconf[:dfile], '--variant', 'Standard', '--size', dconf[:size]]
+```
+
+```
+lsblk
+```
+```
+NAME   MAJ:MIN RM  SIZE RO TYPE MOUNTPOINT
+sda      8:0    0   40G  0 disk
+└─sda1   8:1    0   40G  0 part /
+sdb      8:16   0   40G  0 disk
+sdc      8:32   0  250M  0 disk
+sdd      8:48   0  250M  0 disk
+sde      8:64   0  250M  0 disk
+sdf      8:80   0  250M  0 disk
+```
+далее все команды стартуют от рута
+```
+sudo -i
+```
+копирум таблицу разделов с sda на sdb
+```
+sfdisk -d /dev/sda | sfdisk /dev/sdb
+```
+проверяем результат
+```
+fdisk -l
+```
+```
+Disk /dev/sda: 42.9 GB, 42949672960 bytes, 83886080 sectors
+Units = sectors of 1 * 512 = 512 bytes
+Sector size (logical/physical): 512 bytes / 512 bytes
+I/O size (minimum/optimal): 512 bytes / 512 bytes
+Disk label type: dos
+Disk identifier: 0x0009ef1a
+
+   Device Boot      Start         End      Blocks   Id  System
+/dev/sda1   *        2048    83886079    41942016   83  Linux
+
+Disk /dev/sdb: 42.9 GB, 42949672960 bytes, 83886080 sectors
+Units = sectors of 1 * 512 = 512 bytes
+Sector size (logical/physical): 512 bytes / 512 bytes
+I/O size (minimum/optimal): 512 bytes / 512 bytes
+Disk label type: dos
+Disk identifier: 0x00000000
+
+   Device Boot      Start         End      Blocks   Id  System
+/dev/sdb1   *        2048    83886079    41942016   83  Linux
+
+Disk /dev/sdc: 262 MB, 262144000 bytes, 512000 sectors
+Units = sectors of 1 * 512 = 512 bytes
+Sector size (logical/physical): 512 bytes / 512 bytes
+I/O size (minimum/optimal): 512 bytes / 512 bytes
+
+
+Disk /dev/sdd: 262 MB, 262144000 bytes, 512000 sectors
+Units = sectors of 1 * 512 = 512 bytes
+Sector size (logical/physical): 512 bytes / 512 bytes
+I/O size (minimum/optimal): 512 bytes / 512 bytes
+
+
+Disk /dev/sde: 262 MB, 262144000 bytes, 512000 sectors
+Units = sectors of 1 * 512 = 512 bytes
+Sector size (logical/physical): 512 bytes / 512 bytes
+I/O size (minimum/optimal): 512 bytes / 512 bytes
+
+
+Disk /dev/sdf: 262 MB, 262144000 bytes, 512000 sectors
+Units = sectors of 1 * 512 = 512 bytes
+Sector size (logical/physical): 512 bytes / 512 bytes
+I/O size (minimum/optimal): 512 bytes / 512 bytes
+
+```
+изменяем тип раздела на FD(Raid Autodetect MBR) у /dev/sdb 
+```
+sudo sfdisk --change-id /dev/sdb 1 fd
+```
+```
+Done
+
+```
+так как разметка нашего диска подразумевает только один раздел на весь диск то только его и добавляем в новый массив
+```
+mdadm --create /dev/md0 --level=1 --raid-devices=2 missing /dev/sdb1
+```
+```
+mdadm: Note: this array has metadata at the start and
+    may not be suitable as a boot device.  If you plan to
+    store '/boot' on this device please ensure that
+    your boot-loader understands md/v1.x metadata, or use
+    --metadata=0.90
+Continue creating array? y
+mdadm: Defaulting to version 1.2 metadata
+mdadm: array /dev/md0 started.
+```
+проверяем создался ли раздел
+```
+cat /proc/mdstat
+```
+```
+Personalities : [raid1]
+md0 : active raid1 sdb1[1]
+      41908224 blocks super 1.2 [2/1] [_U]
+
+unused devices: <none>
+```
+создаем файловую систему ext4 на нашем новом массиве
+```
+mkfs.ext4 /dev/md0
+```
+примонтируем новый массив в mnt
+```
+mount /dev/md0 /mnt/
+```
+использую rsync скопируем данные из (sysroot)/ в /mnt исключая виртуальные каталоги (сохраняняя максимальное кол-во параметров файлов в том числе ссылки и т.д. и т.п.)
+```
+rsync -auxHAXSv --exclude=/dev/* --exclude=/proc/* --exclude=/sys/* --exclude=/tmp/* --exclude=/mnt/* /* /mnt
+```
+```
+LONG OUTPUT
+```
+подключим в наш каталог с системными файлами виртуальные директории
+```
+mount --bind /proc /mnt/proc
+mount --bind /dev /mnt/dev
+mount --bind /sys /mnt/sys
+mount --bind /run /mnt/run
+```
+используя chroot подключимся к нашей ОС на массиве 
+```
+chroot /mnt/
+```
+проверим UUID для диска md0 он нам понадобится во время правок fstab
+```
+blkid /dev/md*
+```
+```
+/dev/md0: UUID="bee54ceb-2b02-4807-9cf9-9219c15b5ae7" TYPE="ext4"
+```
+вносим правки в fstab
+```
+vi /etc/fstab
+```
+приводим к следующему виду
+```
+#
+# /etc/fstab
+# Created by anaconda on Thu Apr 30 22:04:55 2020
+#
+# Accessible filesystems, by reference, are maintained under '/dev/disk'
+# See man pages fstab(5), findfs(8), mount(8) and/or blkid(8) for more info
+#
+UUID=bee54ceb-2b02-4807-9cf9-9219c15b5ae7 /                       ext4     defaults        0 0
+/swapfile none swap defaults 0 0
+#VAGRANT-BEGIN
+# The contents below are automatically generated by Vagrant. Do not modify.
+#VAGRANT-END
+```
+добавляем в автозагрузку наш mdadm конфиг
+```
+mdadm --detail --scan > /etc/mdadm.conf
+```
+теперь очередь загрузки и файла initamfs
+```
+cp /boot/initramfs-$(uname -r).img /boot/initramfs-$(uname -r).img.bck
+dracut --mdadmconf --fstab --add="mdraid" --filesystems "xfs ext4 ext3" --add-drivers="raid1" --force /boot/initramfs-$(uname -r).img $(uname -r) -M
+```
+немного тюнинга дефолтных параметров grub
+```
+vi /etc/default/grub
+```
+приводим файл в следующий вид
+```
+GRUB_TIMEOUT=1
+GRUB_DISTRIBUTOR="$(sed 's, release .*$,,g' /etc/system-release)"
+GRUB_DEFAULT=saved
+GRUB_DISABLE_SUBMENU=true
+GRUB_TERMINAL_OUTPUT="console"
+GRUB_CMDLINE_LINUX="crashkernel=auto rd.auto rd.auto=1 rhgb quiet"
+GRUB_PRELOAD_MODULES="mdraid1x"
+GRUB_DISABLE_RECOVERY="true"
+```
+генерируем конфиг файл груба
+```
+grub2-mkconfig -o /boot/grub2/grub.cfg
+```
+ну и наконец устанавливаем grub на /dev/sdb
+```
+grub2-install /dev/sdb
+```
+тот самый момент для перезагрузки и выбора диска sdb как загрузочного
+следующий шаг это добавление нашего предыдущего диска в новый массив 
+```
+sudo -i
+mdadm --manage /dev/md0 --add /dev/sda1
+```
+отслеживаем статус зеркалирования дисков
+```
+watch -n1 "cat /proc/mdstat"
+```
+по окончанию устанавливаем grub и на первый диск
+```
+grub2-install /dev/sda
+```
+на этом дз завершено.
